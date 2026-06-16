@@ -1,3 +1,26 @@
+export interface ToolConfig {
+  name: string
+  type: string
+  max_uses?: number
+  allowed_domains?: string[]
+  blocked_domains?: string[]
+  user_location?: {
+    city?: string
+    region?: string
+    country?: string
+    timezone?: string
+  }
+}
+
+export interface AppConfig {
+  apiKey: string
+  endpoint: string
+  model: string
+  maxTokens: number
+  messageContent: string
+  tool: ToolConfig
+}
+
 export interface DeepSeekWebSearchInput {
   query: string
 }

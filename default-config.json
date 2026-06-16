@@ -1,0 +1,11 @@
+{
+  "endpoint": "https://api.deepseek.com/anthropic/v1/messages",
+  "model": "deepseek-v4-flash",
+  "max_tokens": 32768,
+  "message_content": "web search",
+  "tool": {
+    "name": "web_search",
+    "type": "web_search_20260209",
+    "max_uses": 20
+  }
+}

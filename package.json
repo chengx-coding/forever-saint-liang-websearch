@@ -5,7 +5,7 @@
   "type": "module",
   "main": "./dist/index.js",
   "bin": {
-    "forever-saint-liang-websearch": "./bin/forever-saint-liang-websearch.js"
+    "forever-saint-liang-websearch": "./bin/forever-saint-liang-websearch"
   },
   "files": [
     "dist/",

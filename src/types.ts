@@ -21,6 +21,7 @@ export interface AppConfig {
   tool: ToolConfig
   logEnabled: boolean
   logDir: string
+  searchStatsEnabled: boolean
 }
 
 export interface DeepSeekWebSearchInput {

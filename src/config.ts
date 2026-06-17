@@ -29,6 +29,7 @@ function getDefaultConfig(): AppConfig {
     },
     logEnabled: false,
     logDir: join(tmpdir(), "websearch-via-deepseek-logs"),
+    searchStatsEnabled: false,
   }
 }
 
@@ -84,6 +85,10 @@ function loadEnvConfig(): Partial<AppConfig> {
     config.logDir = process.env.WEBSEARCH_LOG_DIR
   }
 
+  if (process.env.WEBSEARCH_SEARCH_STATS_ENABLED !== undefined) {
+    config.searchStatsEnabled = process.env.WEBSEARCH_SEARCH_STATS_ENABLED === "true" || process.env.WEBSEARCH_SEARCH_STATS_ENABLED === "1"
+  }
+
   return config
 }
 
@@ -129,6 +134,9 @@ function parseCliArgs(argv: string[]): Partial<AppConfig> {
         break
       case "log-dir":
         config.logDir = value
+        break
+      case "search-stats-enabled":
+        config.searchStatsEnabled = value === "true" || value === "1" || value === ""
         break
     }
   }

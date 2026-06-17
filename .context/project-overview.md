@@ -28,6 +28,7 @@ src/
 ├── deepseek-client.ts DeepSeek API 客户端：构建请求、pause_turn 续搜、结果解析
 ├── config.ts          多层配置加载（CLI > 环境变量 > 用户配置 > 默认值）
 ├── logger.ts          搜索日志：每次搜索生成 JSONL 文件
+├── stats.ts           搜索统计：按小时聚合搜索次数存入 SQLite（可选，需 Node >= 22）
 └── types.ts           TypeScript 类型定义
 
 default-config.json    默认配置模板
@@ -56,6 +57,7 @@ default-config.json    默认配置模板
 | `tool.max_uses` | 20 | `--max-uses` | `WEBSEARCH_MAX_USES` | 每次请求最大搜索次数 |
 | `logEnabled` | false | `--log-enabled` | `WEBSEARCH_LOG_ENABLED` | 是否开启搜索日志 |
 | `logDir` | `os.tmpdir()/websearch-via-deepseek-logs` | `--log-dir` | `WEBSEARCH_LOG_DIR` | 日志保存目录 |
+| `searchStatsEnabled` | false | `--search-stats-enabled` | `WEBSEARCH_SEARCH_STATS_ENABLED` | 搜索统计开关（需 Node >= 22） |
 
 默认 systemPrompt：
 > Use multiple keyword variations to conduct thorough research. Prioritize authoritative, verifiable sources. Provide comprehensive, well-cited answers.
@@ -113,6 +115,9 @@ TEST_DEEPSEEK_API_KEY="sk-xxx" npx tsx .local/test-edge.ts
 
 # 日志功能测试
 TEST_DEEPSEEK_API_KEY="sk-xxx" npx tsx .local/test-log-full.ts
+
+# 搜索统计测试
+npx tsx .local/test-stats.ts
 ```
 
 ## OpenCode 本地 MCP 配置

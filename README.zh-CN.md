@@ -4,7 +4,9 @@
 
 一个基于 DeepSeek Anthropic 兼容 API 提供网络搜索能力的 MCP 服务端。
 
-永铭圣良之恩。
+梁圣的恩情还不完。
+
+> "梁圣"指 DeepSeek 创始人梁文峰，以此致敬梁文峰与 DeepSeek 对世界的贡献。
 
 ## 前置条件
 
@@ -17,7 +19,10 @@
 npm install -g forever-saint-liang-websearch
 ```
 
-首次运行时，会自动在 `~/.config/.websearch-via-deepseek/settings.json` 创建用户配置文件。
+首次运行时会自动创建用户配置文件，路径因平台而异：
+
+- **Linux / macOS**：`~/.config/.websearch-via-deepseek/settings.json`
+- **Windows**：`%USERPROFILE%\.config\.websearch-via-deepseek\settings.json`
 
 ## 快速开始
 
@@ -25,7 +30,7 @@ npm install -g forever-saint-liang-websearch
 
 ### 方式 A：用户配置文件（推荐）
 
-编辑 `~/.config/.websearch-via-deepseek/settings.json`，填入 `apiKey`（首次运行自动创建）：
+编辑用户配置文件，填入 `apiKey`：
 
 ```json
 {
@@ -105,7 +110,7 @@ npm install -g forever-saint-liang-websearch
 
 1. **命令行参数** — `--api-key=sk-... --model=deepseek-v4-pro`
 2. **环境变量** — `WEBSEARCH_MODEL`、`WEBSEARCH_ENDPOINT` 等
-3. **用户配置文件** — `~/.config/.websearch-via-deepseek/settings.json`
+3. **用户配置文件** — `settings.json`（路径见安装说明）
 4. **默认值** — 内置于服务端
 
 ### 配置文件 (`settings.json`)
@@ -135,6 +140,7 @@ npm install -g forever-saint-liang-websearch
 | `tool.name` | `"web_search"` | MCP 中注册的工具名称 |
 | `tool.type` | `"web_search_20260209"` | DeepSeek 工具类型 |
 | `tool.max_uses` | `20` | 每次请求最大搜索调用次数 |
+| `searchStatsEnabled` | `false` | 搜索统计开关（需 Node >= 22） |
 
 ### 环境变量
 
@@ -149,6 +155,9 @@ npm install -g forever-saint-liang-websearch
 | `WEBSEARCH_TOOL_NAME` | `tool.name` |
 | `WEBSEARCH_TOOL_TYPE` | `tool.type` |
 | `WEBSEARCH_MAX_USES` | `tool.max_uses` |
+| `WEBSEARCH_LOG_ENABLED` | `logEnabled` |
+| `WEBSEARCH_LOG_DIR` | `logDir` |
+| `WEBSEARCH_SEARCH_STATS_ENABLED` | `searchStatsEnabled` |
 
 ### 命令行参数
 
@@ -166,6 +175,9 @@ forever-saint-liang-websearch --api-key=sk-... --model=deepseek-v4-pro
 | `--tool-name` | `tool.name` |
 | `--tool-type` | `tool.type` |
 | `--max-uses` | `tool.max_uses` |
+| `--log-enabled` | `logEnabled` |
+| `--log-dir` | `logDir` |
+| `--search-stats-enabled` | `searchStatsEnabled` |
 
 ## 工具：`web_search`
 
@@ -178,6 +190,17 @@ forever-saint-liang-websearch --api-key=sk-... --model=deepseek-v4-pro
 | `allowed_domains` | string[] | 否 | — | 仅返回指定域名的结果 |
 | `blocked_domains` | string[] | 否 | — | 排除指定域名的结果 |
 | `user_location` | object | 否 | — | 本地化结果：`{ city?, region?, country?, timezone? }` |
+
+## 工具：`web_search_stats`
+
+查询本地 SQLite 数据库中的按小时搜索统计。此工具仅在 `searchStatsEnabled` 为 `true` **且** Node.js >= 22 时可用。
+
+| 参数 | 类型 | 必填 | 默认值 | 说明 |
+|------|------|------|--------|------|
+| `from` | string (ISO 8601) | 否 | 今天 00:00 | 时间范围起点 |
+| `to` | string (ISO 8601) | 否 | 当前时间 | 时间范围终点 |
+
+**当统计功能不可用时**，工具会返回具体原因：配置未开启、Node.js 版本过低、或数据库异常。配置开关见 `searchStatsEnabled`。
 
 ## 开发
 

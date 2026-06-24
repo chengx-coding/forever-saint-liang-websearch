@@ -9,8 +9,7 @@
   },
   "files": [
     "dist/",
-    "bin/",
-    "default-config.json"
+    "bin/"
   ],
   "scripts": {
     "build": "tsc",

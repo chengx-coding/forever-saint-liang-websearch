@@ -152,6 +152,7 @@ vite.config.ts.timestamp-*
 # Local AI development tools
 .context/
 .local/
+/.xcoding/
 .opencode/
 .claude/
 .trae/

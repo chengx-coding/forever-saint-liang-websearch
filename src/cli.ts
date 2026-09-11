@@ -33,7 +33,7 @@ export function createCli() {
   program
     .option("--api-key <key>", "DeepSeek API key")
     .option("--endpoint <url>", "API endpoint URL")
-    .option("--model <model>", "Model name (deepseek-v4-flash or deepseek-v4-pro)")
+    .option("--model <model>", "Model name (default: deepseek-flash)")
     .option("--max-tokens <n>", "Max output tokens")
     .option("--system-prompt <text>", "System prompt")
     .option("--tool-name <name>", "MCP tool name")

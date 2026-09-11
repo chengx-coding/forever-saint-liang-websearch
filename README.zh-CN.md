@@ -108,10 +108,21 @@ npm install -g forever-saint-liang-websearch
 
 配置加载优先级（从高到低）：
 
-1. **命令行参数** — `--api-key=sk-... --model=deepseek-v4-pro`
-2. **环境变量** — `WEBSEARCH_MODEL`、`WEBSEARCH_ENDPOINT` 等
+1. **命令行参数** — `--api-key=sk-... --model=deepseek-flash`
+2. **环境变量** — `WEBSEARCH_MODEL`（规范变量）或 `DEEPSEEK_MODEL`（旧别名）、`WEBSEARCH_ENDPOINT` 等
 3. **用户配置文件** — `settings.json`（路径见安装说明）
 4. **默认值** — 内置于服务端
+
+就模型而言，完整的取值顺序为：
+
+`--model` > `WEBSEARCH_MODEL` > `DEEPSEEK_MODEL` > `settings.json` > 内置默认值（`deepseek-flash`）
+
+**已退役的模型别名。** `deepseek-v4-flash` 与 `deepseek-v4-flash-vision-exp` 所指的模型已被 DeepSeek 退役。
+若 `settings.json` 中仍然写着其中之一，该值会被忽略，取值继续沿上面的顺序向下传递：除非更高优先级的层给出了
+模型，否则最终落到内置默认值 `deepseek-flash`。配置文件**不会**被改写，仍与你保存时完全一致；同时会向
+**stderr** 输出一行警告，指明配置文件路径与被忽略的别名，并说明将回退到内置默认值、文件保持原样。该警告在
+环境变量与命令行参数合并之前发出，因此不会给出进程最终实际使用的模型——stdout 专供 MCP stdio 协议使用，
+必须保持干净。
 
 ### 配置文件 (`settings.json`)
 
@@ -119,7 +130,7 @@ npm install -g forever-saint-liang-websearch
 {
   "apiKey": "",
   "endpoint": "https://api.deepseek.com/anthropic/v1/messages",
-  "model": "deepseek-v4-flash",
+  "model": "deepseek-flash",
   "maxTokens": 32768,
   "systemPrompt": "Use multiple keyword variations to conduct thorough research. Prioritize authoritative, verifiable sources. Provide comprehensive, well-cited answers.",
   "tool": {
@@ -134,7 +145,7 @@ npm install -g forever-saint-liang-websearch
 |---|--------|------|
 | `apiKey` | (留空) | DeepSeek API 密钥 |
 | `endpoint` | `https://api.deepseek.com/anthropic/v1/messages` | API 端点 URL |
-| `model` | `deepseek-v4-flash` | 模型：`deepseek-v4-flash` 或 `deepseek-v4-pro` |
+| `model` | `deepseek-flash` | 模型标识符，`deepseek-flash` 是 DeepSeek 当前的模型名称 |
 | `maxTokens` | `32768` | 最大输出 token 数 |
 | `systemPrompt` | (见默认值) | 引导搜索行为的系统提示词 |
 | `tool.name` | `"web_search"` | MCP 中注册的工具名称 |
@@ -149,7 +160,8 @@ npm install -g forever-saint-liang-websearch
 | `DEEPSEEK_API_KEY` | `apiKey` |
 | `WEBSEARCH_API_KEY` | `apiKey`（备选） |
 | `WEBSEARCH_ENDPOINT` | `endpoint` |
-| `WEBSEARCH_MODEL` | `model` |
+| `WEBSEARCH_MODEL` | `model`（规范变量） |
+| `DEEPSEEK_MODEL` | `model`（旧别名，仅在未设置 `WEBSEARCH_MODEL` 时生效） |
 | `WEBSEARCH_MAX_TOKENS` | `maxTokens` |
 | `WEBSEARCH_SYSTEM_PROMPT` | `systemPrompt` |
 | `WEBSEARCH_TOOL_NAME` | `tool.name` |
@@ -162,14 +174,14 @@ npm install -g forever-saint-liang-websearch
 ### 命令行参数
 
 ```bash
-forever-saint-liang-websearch --api-key=sk-... --model=deepseek-v4-pro
+forever-saint-liang-websearch --api-key=sk-... --model=deepseek-flash
 ```
 
 | 参数 | 配置项 |
 |------|--------|
 | `--api-key` | `apiKey` |
 | `--endpoint` | `endpoint` |
-| `--model` | `model` |
+| `--model` | `model`（默认 `deepseek-flash`） |
 | `--max-tokens` | `maxTokens` |
 | `--system-prompt` | `systemPrompt` |
 | `--tool-name` | `tool.name` |
@@ -188,7 +200,7 @@ forever-saint-liang-websearch --api-key=sk-... --model=deepseek-v4-pro
 forever-saint-liang-websearch search "TypeScript最新版本"
 
 # 带配置选项搜索
-forever-saint-liang-websearch search "你好世界" --model=deepseek-v4-pro
+forever-saint-liang-websearch search "你好世界" --model=deepseek-flash
 
 # 查看搜索统计
 forever-saint-liang-websearch stats

@@ -108,10 +108,23 @@ Set the API key directly in your MCP client configuration:
 
 Configuration is loaded with the following priority (highest first):
 
-1. **CLI arguments** — `--api-key=sk-... --model=deepseek-v4-pro`
-2. **Environment variables** — `WEBSEARCH_MODEL`, `WEBSEARCH_ENDPOINT`, etc.
+1. **CLI arguments** — `--api-key=sk-... --model=deepseek-flash`
+2. **Environment variables** — `WEBSEARCH_MODEL` (canonical) or `DEEPSEEK_MODEL` (legacy alias), `WEBSEARCH_ENDPOINT`, etc.
 3. **User config file** — `settings.json` (see Installation for path per platform)
 4. **Defaults** — built into the server
+
+For the model specifically, the full resolution order is:
+
+`--model` > `WEBSEARCH_MODEL` > `DEEPSEEK_MODEL` > `settings.json` > built-in default (`deepseek-flash`)
+
+**Retired model aliases.** `deepseek-v4-flash` and `deepseek-v4-flash-vision-exp` name models that
+DeepSeek has retired. If your `settings.json` still pins one of them, the value is ignored and
+resolution continues down the list above — the built-in default `deepseek-flash`, unless a
+higher-precedence layer supplies a model. Your config file is **not** rewritten: it stays exactly as
+you saved it. A warning naming the file and the ignored alias, stating that resolution falls back to
+the built-in default and that the file is left unchanged, is written to **stderr**, because stdout is
+reserved for the MCP stdio protocol. The warning is emitted before the environment and command-line
+layers are merged, so it does not name the model the process will actually use.
 
 ### Config file (`settings.json`)
 
@@ -119,7 +132,7 @@ Configuration is loaded with the following priority (highest first):
 {
   "apiKey": "",
   "endpoint": "https://api.deepseek.com/anthropic/v1/messages",
-  "model": "deepseek-v4-flash",
+  "model": "deepseek-flash",
   "maxTokens": 32768,
   "systemPrompt": "Use multiple keyword variations to conduct thorough research. Prioritize authoritative, verifiable sources. Provide comprehensive, well-cited answers.",
   "tool": {
@@ -134,7 +147,7 @@ Configuration is loaded with the following priority (highest first):
 |-----|---------|-------------|
 | `apiKey` | (empty) | DeepSeek API key |
 | `endpoint` | `https://api.deepseek.com/anthropic/v1/messages` | API endpoint URL |
-| `model` | `deepseek-v4-flash` | Model: `deepseek-v4-flash` or `deepseek-v4-pro` |
+| `model` | `deepseek-flash` | Model identifier. `deepseek-flash` is the current DeepSeek model name. |
 || `maxTokens` | `32768` | Max output tokens |
 | `systemPrompt` | (see default) | System prompt guiding search behavior |
 | `tool.name` | `"web_search"` | Tool name registered in MCP |
@@ -149,7 +162,8 @@ Configuration is loaded with the following priority (highest first):
 | `DEEPSEEK_API_KEY` | `apiKey` |
 | `WEBSEARCH_API_KEY` | `apiKey` (alternative) |
 | `WEBSEARCH_ENDPOINT` | `endpoint` |
-| `WEBSEARCH_MODEL` | `model` |
+| `WEBSEARCH_MODEL` | `model` (canonical) |
+| `DEEPSEEK_MODEL` | `model` (legacy alias, consulted only when `WEBSEARCH_MODEL` is unset) |
 | `WEBSEARCH_MAX_TOKENS` | `maxTokens` |
 | `WEBSEARCH_SYSTEM_PROMPT` | `systemPrompt` |
 | `WEBSEARCH_TOOL_NAME` | `tool.name` |
@@ -162,14 +176,14 @@ Configuration is loaded with the following priority (highest first):
 ### CLI arguments
 
 ```bash
-forever-saint-liang-websearch --api-key=sk-... --model=deepseek-v4-pro
+forever-saint-liang-websearch --api-key=sk-... --model=deepseek-flash
 ```
 
 | Argument | Config key |
 |----------|-----------|
 | `--api-key` | `apiKey` |
 | `--endpoint` | `endpoint` |
-| `--model` | `model` |
+| `--model` | `model` (default `deepseek-flash`) |
 | `--max-tokens` | `maxTokens` |
 | `--system-prompt` | `systemPrompt` |
 | `--tool-name` | `tool.name` |
@@ -188,7 +202,7 @@ The server also supports a standalone CLI mode. When a subcommand is provided, i
 forever-saint-liang-websearch search "TypeScript latest version"
 
 # Search with config options
-forever-saint-liang-websearch search "hello world" --model=deepseek-v4-pro
+forever-saint-liang-websearch search "hello world" --model=deepseek-flash
 
 # View search statistics
 forever-saint-liang-websearch stats

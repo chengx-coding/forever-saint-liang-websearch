@@ -1,7 +1,7 @@
 {
   "name": "forever-saint-liang-websearch",
-  "version": "0.3.0",
-  "description": "An MCP server that provides web search capabilities using DeepSeek's Anthropic-compatible API.",
+  "version": "0.5.0",
+  "description": "An MCP server that provides web search and page fetch capabilities using DeepSeek's Search and Fetch APIs.",
   "type": "module",
   "main": "./dist/index.js",
   "bin": {
@@ -22,6 +22,7 @@
     "mcp",
     "deepseek",
     "web-search",
+    "web-fetch",
     "model-context-protocol",
     "search"
   ],
@@ -32,16 +33,17 @@
     "url": "git+https://github.com/chengx-coding/forever-saint-liang-websearch.git"
   },
   "dependencies": {
-    "@modelcontextprotocol/sdk": "^1.29.0",
+    "@modelcontextprotocol/server": "^2.3.1",
     "commander": "^14.0.3",
-    "zod": "^3.24.5"
+    "zod": "^4.2.0"
   },
   "devDependencies": {
+    "@modelcontextprotocol/client": "^2.3.1",
     "@types/node": "^22.15.0",
     "tsx": "^4.19.0",
     "typescript": "^5.8.0"
   },
   "engines": {
-    "node": ">=18"
+    "node": ">=22"
   }
 }

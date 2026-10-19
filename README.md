@@ -2,15 +2,26 @@
 
 # Forever Saint Liang: Websearch MCP via Deepseek
 
-An MCP server that provides web search capabilities using DeepSeek's Anthropic-compatible API.
+An MCP server that exposes DeepSeek's Search and Fetch APIs to AI agents, plus a standalone CLI.
 
 Forever indebted to Saint Liang.
 
 > "Saint Liang" refers to Liang Wenfeng, founder of DeepSeek — named in honor of his work and DeepSeek's impact on the world.
 
+## What it does
+
+The server gives a model two primitives:
+
+- **`web_search`** returns ranked evidence — title, URL, snippet, a long summary written for models,
+  publication date, authority tier, relevance score, and optionally the page content.
+- **`web_fetch`** turns one URL into Markdown so the model can read the full page.
+
+The server does not generate an answer. The host model already does that; keeping the server as a
+fast, deterministic search and fetch adapter avoids a second model call on every search.
+
 ## Prerequisites
 
-- Node.js >= 18
+- Node.js >= 22
 - A DeepSeek API key from https://platform.deepseek.com
 
 ## Installation
@@ -104,56 +115,75 @@ Set the API key directly in your MCP client configuration:
 }
 ```
 
+The server speaks MCP `2026-07-28` and also serves older clients through the SDK's legacy handshake.
+
 ## Configuration
 
 Configuration is loaded with the following priority (highest first):
 
-1. **CLI arguments** — `--api-key=sk-... --model=deepseek-flash`
-2. **Environment variables** — `WEBSEARCH_MODEL` (canonical) or `DEEPSEEK_MODEL` (legacy alias), `WEBSEARCH_ENDPOINT`, etc.
+1. **CLI arguments** — `--api-key=sk-... --default-count=10`
+2. **Environment variables** — `WEBSEARCH_DEFAULT_COUNT`, `WEBSEARCH_SEARCH_ENDPOINT`, etc.
 3. **User config file** — `settings.json` (see Installation for path per platform)
 4. **Defaults** — built into the server
-
-For the model specifically, the full resolution order is:
-
-`--model` > `WEBSEARCH_MODEL` > `DEEPSEEK_MODEL` > `settings.json` > built-in default (`deepseek-flash`)
-
-**Retired model aliases.** `deepseek-v4-flash` and `deepseek-v4-flash-vision-exp` name models that
-DeepSeek has retired. If your `settings.json` still pins one of them, the value is ignored and
-resolution continues down the list above — the built-in default `deepseek-flash`, unless a
-higher-precedence layer supplies a model. Your config file is **not** rewritten: it stays exactly as
-you saved it. A warning naming the file and the ignored alias, stating that resolution falls back to
-the built-in default and that the file is left unchanged, is written to **stderr**, because stdout is
-reserved for the MCP stdio protocol. The warning is emitted before the environment and command-line
-layers are merged, so it does not name the model the process will actually use.
 
 ### Config file (`settings.json`)
 
 ```json
 {
   "apiKey": "",
-  "endpoint": "https://api.deepseek.com/anthropic/v1/messages",
-  "model": "deepseek-flash",
-  "maxTokens": 32768,
-  "systemPrompt": "Use multiple keyword variations to conduct thorough research. Prioritize authoritative, verifiable sources. Provide comprehensive, well-cited answers.",
+  "searchEndpoint": "https://api.deepseek.com/v1/tools/search",
+  "fetchEndpoint": "https://api.deepseek.com/v1/tools/fetch",
+  "defaultCount": 10,
+  "needContent": false,
+  "fetchMaxChars": 50000,
+  "timeoutMs": 30000,
   "tool": {
-    "name": "web_search",
-    "type": "web_search_20260209",
-    "max_uses": 20
-  }
+    "name": "web_search"
+  },
+  "logEnabled": false,
+  "logDir": "",
+  "searchStatsEnabled": false
 }
 ```
 
 | Key | Default | Description |
 |-----|---------|-------------|
 | `apiKey` | (empty) | DeepSeek API key |
-| `endpoint` | `https://api.deepseek.com/anthropic/v1/messages` | API endpoint URL |
-| `model` | `deepseek-flash` | Model identifier. `deepseek-flash` is the current DeepSeek model name. |
-|| `maxTokens` | `32768` | Max output tokens |
-| `systemPrompt` | (see default) | System prompt guiding search behavior |
-| `tool.name` | `"web_search"` | Tool name registered in MCP |
-| `tool.type` | `"web_search_20260209"` | DeepSeek tool type |
-| `tool.max_uses` | `20` | Max search calls per request |
-| `searchStatsEnabled` | `false` | Enable hourly search statistics (requires Node >= 22) |
+| `searchEndpoint` | `https://api.deepseek.com/v1/tools/search` | DeepSeek Search API endpoint |
+| `fetchEndpoint` | `https://api.deepseek.com/v1/tools/fetch` | DeepSeek Fetch API endpoint |
+| `defaultCount` | `10` | Default number of search results (1–50) |
+| `needContent` | `false` | Default `need_content` flag for searches |
+| `fetchMaxChars` | `50000` | Maximum characters returned by `web_fetch` (1000–200000) |
+| `timeoutMs` | `30000` | Per-request timeout in milliseconds (1000–120000) |
+| `tool.name` | `"web_search"` | MCP tool name for search |
+| `logEnabled` | `false` | Enable JSONL tool logging |
+| `logDir` | OS temp directory | Log directory when logging is enabled; empty uses the OS temp directory |
+| `searchStatsEnabled` | `false` | Enable hourly search/fetch statistics |
+
+Out-of-range numbers are clamped, and invalid endpoint values fall back to the default; both
+events produce a warning on **stderr**. stdout is reserved for the MCP stdio protocol.
+
+### Deprecated keys (0.3.x and earlier)
+
+The old server called DeepSeek's Anthropic-compatible `messages` endpoint with a server-side
+`web_search` tool. That path is gone in `0.5.0`. These keys are still read and parsed, but they no
+longer affect behavior:
+
+| Deprecated key | Old meaning |
+| --- | --- |
+| `endpoint` | Anthropic messages endpoint |
+| `model` | Model identifier |
+| `maxTokens` | Output token limit |
+| `systemPrompt` | Research prompt |
+| `tool.type` | Server-side tool type (`web_search_20260209`) |
+| `tool.max_uses` | Maximum searches per request |
+
+When any of them is present, the server prints one warning naming the ignored keys and continues.
+**Your `settings.json` is never rewritten or migrated** — remove the keys yourself when convenient.
+The same applies to the old environment variables (`WEBSEARCH_ENDPOINT`, `WEBSEARCH_MODEL`,
+`DEEPSEEK_MODEL`, `WEBSEARCH_MAX_TOKENS`, `WEBSEARCH_SYSTEM_PROMPT`, `WEBSEARCH_TOOL_TYPE`,
+`WEBSEARCH_MAX_USES`) and CLI flags (`--endpoint`, `--model`, `--max-tokens`, `--system-prompt`,
+`--tool-type`, `--max-uses`).
 
 ### Environment variables
 
@@ -161,14 +191,13 @@ layers are merged, so it does not name the model the process will actually use.
 |----------|----------------------|
 | `DEEPSEEK_API_KEY` | `apiKey` |
 | `WEBSEARCH_API_KEY` | `apiKey` (alternative) |
-| `WEBSEARCH_ENDPOINT` | `endpoint` |
-| `WEBSEARCH_MODEL` | `model` (canonical) |
-| `DEEPSEEK_MODEL` | `model` (legacy alias, consulted only when `WEBSEARCH_MODEL` is unset) |
-| `WEBSEARCH_MAX_TOKENS` | `maxTokens` |
-| `WEBSEARCH_SYSTEM_PROMPT` | `systemPrompt` |
+| `WEBSEARCH_SEARCH_ENDPOINT` | `searchEndpoint` |
+| `WEBSEARCH_FETCH_ENDPOINT` | `fetchEndpoint` |
+| `WEBSEARCH_DEFAULT_COUNT` | `defaultCount` |
+| `WEBSEARCH_NEED_CONTENT` | `needContent` |
+| `WEBSEARCH_FETCH_MAX_CHARS` | `fetchMaxChars` |
+| `WEBSEARCH_TIMEOUT_MS` | `timeoutMs` |
 | `WEBSEARCH_TOOL_NAME` | `tool.name` |
-| `WEBSEARCH_TOOL_TYPE` | `tool.type` |
-| `WEBSEARCH_MAX_USES` | `tool.max_uses` |
 | `WEBSEARCH_LOG_ENABLED` | `logEnabled` |
 | `WEBSEARCH_LOG_DIR` | `logDir` |
 | `WEBSEARCH_SEARCH_STATS_ENABLED` | `searchStatsEnabled` |
@@ -176,38 +205,40 @@ layers are merged, so it does not name the model the process will actually use.
 ### CLI arguments
 
 ```bash
-forever-saint-liang-websearch --api-key=sk-... --model=deepseek-flash
+forever-saint-liang-websearch --api-key=sk-... --default-count=10
 ```
 
 | Argument | Config key |
 |----------|-----------|
 | `--api-key` | `apiKey` |
-| `--endpoint` | `endpoint` |
-| `--model` | `model` (default `deepseek-flash`) |
-| `--max-tokens` | `maxTokens` |
-| `--system-prompt` | `systemPrompt` |
+| `--search-endpoint` | `searchEndpoint` |
+| `--fetch-endpoint` | `fetchEndpoint` |
+| `--default-count` | `defaultCount` |
+| `--need-content` | `needContent` |
+| `--fetch-max-chars` | `fetchMaxChars` |
+| `--timeout-ms` | `timeoutMs` |
 | `--tool-name` | `tool.name` |
-| `--tool-type` | `tool.type` |
-| `--max-uses` | `tool.max_uses` |
 | `--log-enabled` | `logEnabled` |
 | `--log-dir` | `logDir` |
 | `--search-stats-enabled` | `searchStatsEnabled` |
 
 ## CLI Mode
 
-The server also supports a standalone CLI mode. When a subcommand is provided, it runs as a CLI tool instead of an MCP server:
+The package also runs as a standalone CLI. When a subcommand is provided, it does not start the MCP
+server:
 
 ```bash
-# Perform a web search
+# Search and print JSON evidence
 forever-saint-liang-websearch search "TypeScript latest version"
 
-# Search with config options
-forever-saint-liang-websearch search "hello world" --model=deepseek-flash
+# Search with filters
+forever-saint-liang-websearch search "MCP spec" --allowed-domains=modelcontextprotocol.io --count=5
 
-# View search statistics
+# Fetch a page as Markdown
+forever-saint-liang-websearch fetch "https://modelcontextprotocol.io/specification/2026-07-28"
+
+# View tool statistics
 forever-saint-liang-websearch stats
-
-# Stats with a date range
 forever-saint-liang-websearch stats 2026-06-01 2026-06-24
 
 # Show version and help
@@ -215,39 +246,115 @@ forever-saint-liang-websearch --version
 forever-saint-liang-websearch --help
 ```
 
-All configuration flags (`--api-key`, `--model`, `--max-uses`, etc.) work in CLI mode just like MCP mode. Output is in JSON format.
+All configuration flags work in CLI mode. Output is JSON on stdout; errors are JSON on stderr.
 
-### CLI Subcommands
+### CLI subcommands
 
 | Command | Description |
 |---------|-------------|
-| `search <query>` | Perform a web search, output JSON |
-| `stats [from] [to]` | Show search statistics, output JSON |
+| `search <query>` | Search the web, output JSON evidence |
+| `fetch <url>` | Fetch one page, output Markdown content as JSON |
+| `stats [from] [to]` | Show hourly search and fetch statistics |
 | `version` | Show version number |
 | `help` | Show help information |
 
 ## Tool: `web_search`
 
-Search the web using DeepSeek's built-in web search.
+Search the web with DeepSeek's Search API. Results are evidence, not an answer.
 
 | Parameter | Type | Required | Default | Description |
 |-----------|------|----------|---------|-------------|
-| `query` | string | Yes | — | Search query (1-500 chars) |
-| `max_uses` | number | No | `config.tool.max_uses ?? 20` | Max search calls (capped by server config `tool.max_uses`) |
-| `allowed_domains` | string[] | No | — | Only include results from these domains |
-| `blocked_domains` | string[] | No | — | Exclude results from these domains |
-| `user_location` | object | No | — | Localized results: `{ city?, region?, country?, timezone? }` |
+| `query` | string (1–128) | Yes | — | Search query |
+| `count` | number (1–50) | No | `defaultCount` | Number of results |
+| `need_content` | boolean | No | `needContent` | Include page content in each result |
+| `allowed_domains` | string[] | No | — | Only these bare domains (translated to `site:` operators) |
+| `blocked_domains` | string[] | No | — | Exclude these domains (translated to `-site:` operators) |
+| `lang` | string | No | — | Comma-separated language codes, e.g. `zh,en` |
+| `after` | string | No | — | Only pages after `YYYY` or `YYYY-MM-DD` |
+| `before` | string | No | — | Only pages before `YYYY` or `YYYY-MM-DD` |
+| `ori_question` | string (1–128) | No | — | Original user question, for query understanding |
+| `localization` | string | No | — | IPv4/IPv6 address used to localize results |
+
+The query plus any generated operators must fit in **128 characters**. If it does not, the tool
+returns an error explaining the limit; it never truncates silently.
+
+Output:
+
+```json
+{
+  "query": "DeepSeek V4",
+  "effective_query": "DeepSeek V4 site:github.com",
+  "count": 10,
+  "need_content": false,
+  "result_count": 1,
+  "results": [
+    {
+      "index": 0,
+      "title": "…",
+      "url": "https://…",
+      "snippet": "…",
+      "summary": "…",
+      "site_name": "…",
+      "site_icon": "https://…",
+      "date": "2026-10-17T00:00:00+00:00",
+      "authority": 3,
+      "rerank_score": 2.4
+    }
+  ]
+}
+```
+
+`content` appears inside a result only when `need_content` is true and DeepSeek returned content.
+
+## Tool: `web_fetch`
+
+Fetch one page with DeepSeek's Fetch API and return its main content as Markdown.
+
+| Parameter | Type | Required | Default | Description |
+|-----------|------|----------|---------|-------------|
+| `url` | string | Yes | — | Absolute HTTP/HTTPS URL, at most 8192 characters |
+| `max_chars` | number (1000–200000) | No | `fetchMaxChars` | Maximum characters to return |
+
+Output:
+
+```json
+{
+  "url": "https://…",
+  "title": "…",
+  "content": "# Markdown…",
+  "content_length": 12345,
+  "truncated": false
+}
+```
+
+`content_length` is the original length before truncation.
 
 ## Tool: `web_search_stats`
 
-Query hourly search statistics from the local SQLite database. This tool is only available when `searchStatsEnabled` is `true` **and** Node.js >= 22.
+Query hourly tool statistics from the local SQLite database. Available when
+`searchStatsEnabled` is `true`.
 
 | Parameter | Type | Required | Default | Description |
 |-----------|------|----------|---------|-------------|
 | `from` | string (ISO 8601) | No | Today 00:00 | Start of time range |
 | `to` | string (ISO 8601) | No | Now | End of time range |
 
-**When the stats feature is unavailable**, the tool returns a specific reason: configuration disabled, Node.js version too low, or database error. See `searchStatsEnabled` in the Configuration section.
+Output includes `total_count`, `search_count`, `fetch_count`, `record_count`, and per-hour records
+with both counts. Existing `search_stats` databases are migrated automatically on first use.
+
+## Upgrading from 0.3.x
+
+`0.5.0` is a breaking release:
+
+- The `answer` field is gone. `web_search` returns evidence; the host model writes the answer.
+- `thinking`, `model`, `stop_reason`, `turns`, and token usage fields are gone.
+- `max_uses` is replaced by `count` and is no longer part of the tool schema. `count` is a number of
+  results, not a number of search calls; the old key is not repurposed.
+- `user_location` is replaced by `localization`, which accepts an IP address.
+- `query` is limited to 128 characters.
+- The minimum Node.js version is 22.
+- The MCP server now speaks `2026-07-28` and still serves legacy clients.
+- The old `messages` backend and its config keys are deprecated; see above.
 
 ## Development
 
@@ -257,6 +364,9 @@ cd forever-saint-liang-websearch
 npm install
 npm run dev
 ```
+
+The verification gate is `npm run build` and `npm test`. `npm test` can report zero tests and still
+exit zero, so check the printed pass count.
 
 ## Acknowledgments
 

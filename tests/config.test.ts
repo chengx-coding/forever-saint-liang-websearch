@@ -1,4 +1,4 @@
-// Tests for the configuration layer (solution unit U2).
+// Tests for the configuration layer.
 //
 // Every case runs the real loader in a CHILD PROCESS through `tests/config-driver.ts`. That is not
 // incidental: `loadConfig()` reads `os.homedir()` and creates `settings.json` on first run, so an
@@ -21,8 +21,12 @@ const driverPath = join(testsDir, "config-driver.ts")
 
 const CONFIG_DIR_NAME = ".websearch-via-deepseek"
 const CONFIG_FILE_NAME = "settings.json"
-const BUILT_IN_DEFAULT_MODEL = "deepseek-flash"
-const BUILT_IN_DEFAULT_MAX_TOKENS = 32768
+
+const DEFAULT_SEARCH_ENDPOINT = "https://api.deepseek.com/v1/tools/search"
+const DEFAULT_FETCH_ENDPOINT = "https://api.deepseek.com/v1/tools/fetch"
+const DEFAULT_COUNT = 10
+const DEFAULT_FETCH_MAX_CHARS = 50_000
+const DEFAULT_TIMEOUT_MS = 30_000
 
 const cleanupCallbacks: Array<() => void> = []
 
@@ -135,7 +139,7 @@ function parseConfig(run: DriverRun, label: string): Record<string, unknown> {
   return parsed as Record<string, unknown>
 }
 
-function assertKeyType(config: Record<string, unknown>, key: string, expected: "string" | "number"): void {
+function assertKeyType(config: Record<string, unknown>, key: string, expected: "string" | "number" | "boolean"): void {
   assert.equal(
     typeof config[key],
     expected,
@@ -143,224 +147,198 @@ function assertKeyType(config: Record<string, unknown>, key: string, expected: "
   )
 }
 
-test("1. a fresh home with no model environment variables and no arguments resolves the built-in default", () => {
+function generatedSettings(home: string): Record<string, unknown> {
+  return JSON.parse(readFileSync(settingsPathFor(home), "utf-8")) as Record<string, unknown>
+}
+
+test("1. a fresh home resolves the new built-in defaults and writes only new keys", () => {
   const home = createTempHome()
   const run = runDriver(home)
   const config = parseConfig(run, "fresh home")
 
-  assert.equal(
-    config.model,
-    BUILT_IN_DEFAULT_MODEL,
-    "with no environment variable, no argument and no settings.json the built-in default model must be " + BUILT_IN_DEFAULT_MODEL,
-  )
-  assert.equal(
-    run.stderrLines.length,
-    0,
-    "a first run with no configuration file is normal and must not warn, because warnings are reserved for real problems",
-  )
-  assert.ok(
-    existsSync(settingsPathFor(home)),
-    "the first run must generate settings.json inside the redirected home, which also proves the child never touches the real user profile",
-  )
+  assert.equal(config.searchEndpoint, DEFAULT_SEARCH_ENDPOINT)
+  assert.equal(config.fetchEndpoint, DEFAULT_FETCH_ENDPOINT)
+  assert.equal(config.defaultCount, DEFAULT_COUNT)
+  assert.equal(config.needContent, false)
+  assert.equal(config.fetchMaxChars, DEFAULT_FETCH_MAX_CHARS)
+  assert.equal(config.timeoutMs, DEFAULT_TIMEOUT_MS)
+  assert.deepEqual(config.tool, { name: "web_search" })
+  assert.equal(run.stderrLines.length, 0, "a first run with no settings file is normal and must not warn")
+
+  const generated = generatedSettings(home)
+  assert.ok(existsSync(settingsPathFor(home)))
+  assert.ok("searchEndpoint" in generated, "the auto-generated file must contain the new search endpoint key")
+  assert.ok(!("endpoint" in generated), "the auto-generated file must not contain the retired messages endpoint")
+  assert.ok(!("model" in generated), "the auto-generated file must not contain the retired model key")
+  assert.deepEqual(generated.tool, { name: "web_search" }, "the auto-generated tool object must not carry retired keys")
 })
 
-test("2. a settings.json model overrides the built-in default", () => {
+test("2. settings.json overrides the built-in defaults", () => {
   const home = createTempHome()
-  writeSettingsJson(home, { model: "settings-layer-model" })
-  const run = runDriver(home)
-  const config = parseConfig(run, "settings layer")
+  writeSettingsJson(home, {
+    searchEndpoint: "https://proxy.example/search",
+    fetchEndpoint: "https://proxy.example/fetch",
+    defaultCount: 25,
+    needContent: true,
+    fetchMaxChars: 12_000,
+    timeoutMs: 5_000,
+    tool: { name: "search_custom" },
+  })
+  const config = parseConfig(runDriver(home), "settings layer")
 
-  assert.equal(
-    config.model,
-    "settings-layer-model",
-    "the user settings.json layer must win over the built-in default, otherwise every persisted user choice would be ignored",
-  )
+  assert.equal(config.searchEndpoint, "https://proxy.example/search")
+  assert.equal(config.fetchEndpoint, "https://proxy.example/fetch")
+  assert.equal(config.defaultCount, 25)
+  assert.equal(config.needContent, true)
+  assert.equal(config.fetchMaxChars, 12_000)
+  assert.equal(config.timeoutMs, 5_000)
+  assert.deepEqual(config.tool, { name: "search_custom" })
 })
 
-test("3. DEEPSEEK_MODEL alone is honoured as the accepted legacy alias", () => {
+test("3. environment variables override settings.json", () => {
   const home = createTempHome()
-  const run = runDriver(home, [], { DEEPSEEK_MODEL: "legacy-env-model" })
-  const config = parseConfig(run, "legacy alias")
-
-  assert.equal(
-    config.model,
-    "legacy-env-model",
-    "DEEPSEEK_MODEL must keep working as the documented legacy alias, because removing a published variable name would break existing setups",
-  )
-})
-
-test("4. WEBSEARCH_MODEL wins over DEEPSEEK_MODEL", () => {
-  const home = createTempHome()
+  writeSettingsJson(home, { searchEndpoint: "https://settings.example/search", defaultCount: 25 })
   const run = runDriver(home, [], {
-    WEBSEARCH_MODEL: "canonical-env-model",
-    DEEPSEEK_MODEL: "legacy-env-model",
+    WEBSEARCH_SEARCH_ENDPOINT: "https://env.example/search",
+    WEBSEARCH_DEFAULT_COUNT: "7",
+    WEBSEARCH_NEED_CONTENT: "true",
   })
-  const config = parseConfig(run, "canonical over legacy")
+  const config = parseConfig(run, "env layer")
 
-  assert.equal(
-    config.model,
-    "canonical-env-model",
-    "the canonical WEBSEARCH_MODEL must win over the legacy DEEPSEEK_MODEL, so the documented precedence order holds",
-  )
+  assert.equal(config.searchEndpoint, "https://env.example/search")
+  assert.equal(config.defaultCount, 7)
+  assert.equal(config.needContent, true)
 })
 
-test("5. --model on the command line wins over both environment variables", () => {
+test("4. CLI arguments win over environment variables, in both value forms", () => {
   const home = createTempHome()
-  const run = runDriver(home, ["--model=cli-layer-model"], {
-    WEBSEARCH_MODEL: "canonical-env-model",
-    DEEPSEEK_MODEL: "legacy-env-model",
-  })
+  const run = runDriver(
+    home,
+    ["--search-endpoint=https://cli.example/search", "--default-count", "3", "--need-content"],
+    {
+      WEBSEARCH_SEARCH_ENDPOINT: "https://env.example/search",
+      WEBSEARCH_DEFAULT_COUNT: "7",
+      WEBSEARCH_NEED_CONTENT: "false",
+    },
+  )
   const config = parseConfig(run, "cli layer")
 
-  assert.equal(
-    config.model,
-    "cli-layer-model",
-    "the --model argument must win over every environment variable, otherwise an explicit per-invocation choice could not be made",
-  )
+  assert.equal(config.searchEndpoint, "https://cli.example/search")
+  assert.equal(config.defaultCount, 3)
+  assert.equal(config.needContent, true)
 })
 
-test("6. a persisted retired alias falls back to the default, warns on stderr, and never rewrites the file", () => {
+test("5. a settings.json prefixed with a UTF-8 BOM is genuinely read", () => {
   const home = createTempHome()
-  const filePath = writeSettingsJson(home, { model: "deepseek-v4-flash" })
-  const bytesBefore = readFileSync(filePath)
-  const hashBefore = sha256(filePath)
-
-  const run = runDriver(home)
-  const config = parseConfig(run, "retired alias")
-
-  assert.equal(
-    config.model,
-    BUILT_IN_DEFAULT_MODEL,
-    "a persisted retired alias must be treated as unset so resolution falls through to the built-in default, which is the whole point of this migration",
-  )
-
-  const warning = run.stderrLines.find((line) => line.includes("deepseek-v4-flash"))
-  assert.ok(
-    warning !== undefined,
-    "the retired alias must be announced on stderr, because the user's file is never rewritten and this warning is the only visible surface of the migration",
-  )
-  assert.ok(
-    warning.includes(filePath),
-    "the warning must name the configuration file it ignored, so the user can find the stale value",
-  )
-  assert.ok(
-    warning.includes("falling back to the built-in default"),
-    "the warning must state that this layer falls back to the built-in default, because the user's file is never rewritten and this warning is where they learn the stale value was dropped",
-  )
-  assert.ok(
-    !warning.includes("using " + BUILT_IN_DEFAULT_MODEL),
-    "the warning must not claim the process will use " + BUILT_IN_DEFAULT_MODEL + ", because it is emitted before the environment and CLI layers are merged and WEBSEARCH_MODEL or --model can still override the model",
-  )
-
-  assert.equal(
-    run.stdoutLines.length,
-    1,
-    "stdout must stay protocol-clean even when a warning is emitted, because the warning belongs on stderr only",
-  )
-
-  const bytesAfter = readFileSync(filePath)
-  assert.ok(
-    bytesBefore.equals(bytesAfter),
-    "the user's settings.json bytes must be identical after a run, because the documented promise is that the file persists across upgrades and is only ever written on first run",
-  )
-  assert.equal(
-    sha256(filePath),
-    hashBefore,
-    "the settings.json SHA-256 must be unchanged after a run, which is the same never-rewrite promise stated as a digest",
-  )
-})
-
-test("7. a settings.json prefixed with a UTF-8 BOM is genuinely read", () => {
-  const home = createTempHome()
-  const filePath = writeSettingsFile(home, "\uFEFF" + JSON.stringify({ model: "bom-layer-model" }) + "\n")
+  const filePath = writeSettingsFile(home, "\uFEFF" + JSON.stringify({ searchEndpoint: "https://bom.example/search" }) + "\n")
   const head = readFileSync(filePath).subarray(0, 3)
 
-  assert.deepEqual(
-    [...head],
-    [0xef, 0xbb, 0xbf],
-    "the fixture must really start with the UTF-8 BOM bytes EF BB BF, otherwise this case would not test BOM tolerance at all",
-  )
-
-  const run = runDriver(home)
-  const config = parseConfig(run, "bom file")
-
-  assert.equal(
-    config.model,
-    "bom-layer-model",
-    "a BOM-prefixed file must be parsed rather than silently discarded, because losing the whole user layer to an invisible byte was the reported defect",
-  )
+  assert.deepEqual([...head], [0xef, 0xbb, 0xbf], "the fixture must really start with the UTF-8 BOM bytes EF BB BF")
+  const config = parseConfig(runDriver(home), "bom file")
+  assert.equal(config.searchEndpoint, "https://bom.example/search")
 })
 
-test("8. an unparseable settings.json warns, exits zero and falls back to the default", () => {
+test("6. an unparseable settings.json warns, exits zero and falls back to defaults", () => {
   const home = createTempHome()
-  const filePath = writeSettingsFile(home, '{\n  "model": "truncated-model",\n  "apiKey": "unterminated\n')
+  const filePath = writeSettingsFile(home, '{\n  "searchEndpoint": "https://truncated.example/search",\n  "apiKey": "unterminated\n')
 
   const run = runDriver(home)
   const config = parseConfig(run, "unparseable file")
 
-  assert.equal(
-    run.status,
-    0,
-    "a parse failure must never be fatal, because a crash on startup is worse than the degraded run it replaces",
-  )
-  assert.equal(
-    config.model,
-    BUILT_IN_DEFAULT_MODEL,
-    "an unparseable file must fall back to the built-in default rather than leaving the model undefined",
-  )
+  assert.equal(config.searchEndpoint, DEFAULT_SEARCH_ENDPOINT)
   assert.ok(
     run.stderrLines.some((line) => line.includes(filePath)),
-    "the parse failure must be reported on stderr naming the file, because a silently swallowed parse error was the reported defect",
+    "the parse failure must be reported on stderr naming the file, because a silently swallowed parse error would be a defect",
   )
-  assert.equal(
-    run.stdoutLines.length,
-    1,
-    "stdout must stay protocol-clean when a parse failure is reported, because the report belongs on stderr only",
-  )
+  assert.equal(run.stdoutLines.length, 1)
 })
 
-test('9. WEBSEARCH_MODEL="" clears the model instead of letting the settings layer survive', () => {
+test("7. deprecated settings keys warn, are ignored, and leave the user file byte-identical", () => {
   const home = createTempHome()
-  writeSettingsJson(home, { model: "settings-layer-model" })
-  const run = runDriver(home, [], { WEBSEARCH_MODEL: "" })
-  const config = parseConfig(run, "empty canonical variable")
+  const filePath = writeSettingsJson(home, {
+    endpoint: "https://api.deepseek.com/anthropic/v1/messages",
+    model: "deepseek-flash",
+    maxTokens: 32768,
+    systemPrompt: "old prompt",
+    tool: { name: "web_search", type: "web_search_20260209", max_uses: 20 },
+  })
+  const bytesBefore = readFileSync(filePath)
+  const hashBefore = sha256(filePath)
 
-  assert.equal(
-    config.model,
-    "",
-    "an explicitly empty WEBSEARCH_MODEL must clear the lower layer, which requires reading the model variable with an undefined check rather than a truthiness guard",
-  )
-  assertKeyType(config, "model", "string")
-})
-
-test('10. "maxTokens": "" in settings.json leaves the numeric default intact', () => {
-  const home = createTempHome()
-  writeSettingsJson(home, { maxTokens: "" })
   const run = runDriver(home)
-  const config = parseConfig(run, "empty string for a numeric key")
+  const config = parseConfig(run, "deprecated keys")
 
-  assert.equal(
-    config.maxTokens,
-    BUILT_IN_DEFAULT_MAX_TOKENS,
-    "an empty string must not overwrite a numeric key, because an untyped empty string would be sent as max_tokens and break the request",
-  )
-  assertKeyType(config, "maxTokens", "number")
+  assert.equal(config.searchEndpoint, DEFAULT_SEARCH_ENDPOINT)
+  assert.deepEqual(config.tool, { name: "web_search" })
+  assert.ok(!("endpoint" in config), "the resolved configuration must not carry a retired endpoint key")
+  assert.ok(!("model" in config), "the resolved configuration must not carry a retired model key")
+
+  const warning = run.stderrLines.find((line) => line.includes("deprecated"))
+  assert.ok(warning !== undefined, "deprecated keys must be announced on stderr rather than silently ignored")
+  assert.ok(warning.includes("endpoint"), "the warning must name at least one of the keys it ignored")
+  assert.ok(warning.includes("tool.max_uses"), "the warning must name nested deprecated tool keys")
+
+  assert.ok(bytesBefore.equals(readFileSync(filePath)), "the user's settings.json bytes must be identical after a run")
+  assert.equal(sha256(filePath), hashBefore, "the settings.json digest must be unchanged after a run")
 })
 
-test('11. WEBSEARCH_MAX_TOKENS="" leaves the numeric default intact and never becomes 0', () => {
+test("8. deprecated environment variables and CLI flags warn without affecting the result", () => {
   const home = createTempHome()
-  const run = runDriver(home, [], { WEBSEARCH_MAX_TOKENS: "" })
-  const config = parseConfig(run, "empty numeric variable")
+  const run = runDriver(home, ["--model=deepseek-flash", "--max-uses", "20"], {
+    WEBSEARCH_ENDPOINT: "https://api.deepseek.com/anthropic/v1/messages",
+    WEBSEARCH_MAX_USES: "9",
+  })
+  const config = parseConfig(run, "deprecated env and cli")
 
-  assert.equal(
-    config.maxTokens,
-    BUILT_IN_DEFAULT_MAX_TOKENS,
-    "an empty numeric variable must not become 0, which is exactly what Number(\"\") would produce if the numeric guard were relaxed like the model guard",
+  assert.equal(config.searchEndpoint, DEFAULT_SEARCH_ENDPOINT)
+  const warning = run.stderrLines.find((line) => line.includes("deprecated"))
+  assert.ok(warning !== undefined)
+  assert.ok(warning.includes("WEBSEARCH_ENDPOINT"))
+  assert.ok(warning.includes("WEBSEARCH_MAX_USES"))
+  assert.ok(warning.includes("--model"))
+  assert.ok(warning.includes("--max-uses"))
+})
+
+test("9. numeric values outside their range are clamped rather than sent to the API", () => {
+  const home = createTempHome()
+  writeSettingsJson(home, { defaultCount: 999, fetchMaxChars: 10, timeoutMs: 0 })
+  const run = runDriver(home)
+  const config = parseConfig(run, "clamped numbers")
+
+  assert.equal(config.defaultCount, 50)
+  assert.equal(config.fetchMaxChars, 1_000)
+  assert.equal(config.timeoutMs, 1_000)
+  assert.ok(run.stderrLines.some((line) => line.includes("outside")), "clamping must be visible on stderr")
+})
+
+test("10. an invalid endpoint falls back to the built-in default with a warning", () => {
+  const home = createTempHome()
+  writeSettingsJson(home, { searchEndpoint: "not a url" })
+  const run = runDriver(home)
+  const config = parseConfig(run, "invalid endpoint")
+
+  assert.equal(config.searchEndpoint, DEFAULT_SEARCH_ENDPOINT)
+  assert.ok(run.stderrLines.some((line) => line.includes("invalid searchEndpoint")))
+})
+
+test("11. empty strings do not overwrite numeric or boolean keys", () => {
+  const home = createTempHome()
+  writeSettingsJson(home, { defaultCount: "", needContent: "", fetchMaxChars: "" })
+  const config = parseConfig(runDriver(home), "empty values")
+
+  assert.equal(config.defaultCount, DEFAULT_COUNT)
+  assert.equal(config.needContent, false)
+  assert.equal(config.fetchMaxChars, DEFAULT_FETCH_MAX_CHARS)
+  assertKeyType(config, "defaultCount", "number")
+  assertKeyType(config, "needContent", "boolean")
+})
+
+test("12. a boolean CLI flag can explicitly turn an environment value off", () => {
+  const home = createTempHome()
+  const config = parseConfig(
+    runDriver(home, ["--need-content=false"], { WEBSEARCH_NEED_CONTENT: "true" }),
+    "explicit false",
   )
-  assert.notEqual(
-    config.maxTokens,
-    0,
-    "an empty WEBSEARCH_MAX_TOKENS must not be coerced to zero, because zero is a valid-looking value that would silently break requests",
-  )
-  assertKeyType(config, "maxTokens", "number")
+
+  assert.equal(config.needContent, false)
 })

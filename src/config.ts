@@ -7,18 +7,36 @@ import type { AppConfig } from "./types.js"
 const CONFIG_DIR_NAME = ".websearch-via-deepseek"
 const CONFIG_FILE_NAME = "settings.json"
 
-// DeepSeek's current model name is deliberately version-free (`deepseek-flash` is the documented
-// name for DeepSeek-V4.1-Flash), so the constant does not have to track every model release.
-const DEFAULT_MODEL = "deepseek-flash"
+const DEFAULT_SEARCH_ENDPOINT = "https://api.deepseek.com/v1/tools/search"
+const DEFAULT_FETCH_ENDPOINT = "https://api.deepseek.com/v1/tools/fetch"
+const DEFAULT_COUNT = 10
+const DEFAULT_FETCH_MAX_CHARS = 50_000
+const DEFAULT_TIMEOUT_MS = 30_000
 
-// DeepSeek has retired the models these names refer to. Requests that still use them are only
-// temporarily routed to the current model, so a persisted value must be treated as "unset" and
-// resolution must fall through to the built-in default. The user's configuration file is never
-// rewritten to make that happen.
-const RETIRED_MODEL_ALIASES = new Set([
-  "deepseek-v4-flash",
-  "deepseek-v4-flash-vision-exp",
+const DEPRECATED_CONFIG_KEYS = ["endpoint", "model", "maxTokens", "systemPrompt"] as const
+const DEPRECATED_TOOL_KEYS = ["type", "max_uses"] as const
+const DEPRECATED_ENV_KEYS = [
+  "WEBSEARCH_ENDPOINT",
+  "WEBSEARCH_MODEL",
+  "DEEPSEEK_MODEL",
+  "WEBSEARCH_MAX_TOKENS",
+  "WEBSEARCH_SYSTEM_PROMPT",
+  "WEBSEARCH_TOOL_TYPE",
+  "WEBSEARCH_MAX_USES",
+] as const
+const DEPRECATED_CLI_KEYS = new Set([
+  "endpoint",
+  "model",
+  "max-tokens",
+  "system-prompt",
+  "tool-type",
+  "max-uses",
 ])
+
+interface PartialLoad {
+  config: Partial<AppConfig>
+  legacyKeys: string[]
+}
 
 // Diagnostics go to stderr only. stdout carries the MCP stdio protocol, so writing anything
 // there would corrupt the session.
@@ -28,6 +46,10 @@ function warnToStderr(message: string): void {
 
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error)
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value)
 }
 
 function getConfigDir(): string {
@@ -41,14 +63,14 @@ function getConfigFilePath(): string {
 function getDefaultConfig(): AppConfig {
   return {
     apiKey: "",
-    endpoint: "https://api.deepseek.com/anthropic/v1/messages",
-    model: DEFAULT_MODEL,
-    maxTokens: 32768,
-    systemPrompt: "Use multiple keyword variations to conduct thorough research. Prioritize authoritative, verifiable sources. Provide comprehensive, well-cited answers.",
+    searchEndpoint: DEFAULT_SEARCH_ENDPOINT,
+    fetchEndpoint: DEFAULT_FETCH_ENDPOINT,
+    defaultCount: DEFAULT_COUNT,
+    needContent: false,
+    fetchMaxChars: DEFAULT_FETCH_MAX_CHARS,
+    timeoutMs: DEFAULT_TIMEOUT_MS,
     tool: {
       name: "web_search",
-      type: "web_search_20260209",
-      max_uses: 20,
     },
     logEnabled: false,
     logDir: join(tmpdir(), "websearch-via-deepseek-logs"),
@@ -69,18 +91,18 @@ function ensureUserConfig(): void {
   }
 }
 
-function loadUserConfig(): Partial<AppConfig> {
+function loadUserConfig(): PartialLoad {
   const filePath = getConfigFilePath()
 
   // A missing file is the normal first-run state, not a problem worth reporting.
-  if (!existsSync(filePath)) return {}
+  if (!existsSync(filePath)) return { config: {}, legacyKeys: [] }
 
   let raw: string
   try {
     raw = readFileSync(filePath, "utf-8")
   } catch (error) {
     warnToStderr(`[websearch-via-deepseek] Could not read ${filePath}: ${errorMessage(error)}`)
-    return {}
+    return { config: {}, legacyKeys: [] }
   }
 
   let parsed: unknown
@@ -90,54 +112,60 @@ function loadUserConfig(): Partial<AppConfig> {
     parsed = JSON.parse(raw.replace(/^\uFEFF/, ""))
   } catch (error) {
     warnToStderr(`[websearch-via-deepseek] Ignoring configuration at ${filePath}, it is not valid JSON: ${errorMessage(error)}`)
-    return {}
+    return { config: {}, legacyKeys: [] }
   }
 
-  if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
+  if (!isRecord(parsed)) {
     warnToStderr(`[websearch-via-deepseek] Ignoring configuration at ${filePath}, it must contain a JSON object`)
-    return {}
+    return { config: {}, legacyKeys: [] }
   }
 
-  const config = parsed as Partial<AppConfig>
-
-  // Normalisation runs after the BOM-tolerant parse on purpose: run first, a BOM-prefixed file
-  // still holding a retired alias would be dropped wholesale and keep ignoring the new default.
-  if (typeof config.model === "string" && RETIRED_MODEL_ALIASES.has(config.model.trim().toLowerCase())) {
-    const ignored = config.model
-    delete config.model
-    warnToStderr(`[websearch-via-deepseek] Ignoring retired model "${ignored}" from ${filePath}; falling back to the built-in default instead. The file is left unchanged.`)
+  const legacyKeys: string[] = []
+  for (const key of DEPRECATED_CONFIG_KEYS) {
+    if (key in parsed) legacyKeys.push(key)
   }
 
-  return config
+  if (isRecord(parsed.tool)) {
+    for (const key of DEPRECATED_TOOL_KEYS) {
+      if (key in parsed.tool) legacyKeys.push(`tool.${key}`)
+    }
+  }
+
+  // Deprecated keys are not merely ignored by the readers: they are removed here so the merged
+  // configuration object cannot carry values that no longer describe the process.
+  for (const key of DEPRECATED_CONFIG_KEYS) {
+    delete parsed[key]
+  }
+  if (isRecord(parsed.tool)) {
+    for (const key of DEPRECATED_TOOL_KEYS) {
+      delete parsed.tool[key]
+    }
+  }
+
+  return { config: parsed as Partial<AppConfig>, legacyKeys }
 }
 
-function loadEnvConfig(): Partial<AppConfig> {
+function loadEnvConfig(): PartialLoad {
   const config: Partial<AppConfig> = {}
+  const legacyKeys: string[] = []
+
+  for (const key of DEPRECATED_ENV_KEYS) {
+    if (process.env[key] !== undefined) legacyKeys.push(key)
+  }
 
   const apiKey = process.env.DEEPSEEK_API_KEY || process.env.WEBSEARCH_API_KEY
   if (apiKey) config.apiKey = apiKey
 
-  if (process.env.WEBSEARCH_ENDPOINT) config.endpoint = process.env.WEBSEARCH_ENDPOINT
-
-  // The model is the one variable read with `!== undefined`, so an explicitly empty
-  // WEBSEARCH_MODEL propagates and clears the lower layer. `WEBSEARCH_MODEL` is canonical and
-  // stays authoritative via `??`; `DEEPSEEK_MODEL` is the accepted legacy alias. Every other
-  // read below keeps its truthiness guard, because `Number("")` is 0 and an empty numeric
-  // variable must not silently become zero.
-  const model = process.env.WEBSEARCH_MODEL ?? process.env.DEEPSEEK_MODEL
-  if (model !== undefined) config.model = model
-
-  if (process.env.WEBSEARCH_MAX_TOKENS) config.maxTokens = Number(process.env.WEBSEARCH_MAX_TOKENS)
-  if (process.env.WEBSEARCH_SYSTEM_PROMPT) config.systemPrompt = process.env.WEBSEARCH_SYSTEM_PROMPT
-
-  const tool: Record<string, unknown> = {}
-  if (process.env.WEBSEARCH_TOOL_NAME) tool.name = process.env.WEBSEARCH_TOOL_NAME
-  if (process.env.WEBSEARCH_TOOL_TYPE) tool.type = process.env.WEBSEARCH_TOOL_TYPE
-  if (process.env.WEBSEARCH_MAX_USES) tool.max_uses = Number(process.env.WEBSEARCH_MAX_USES)
-
-  if (Object.keys(tool).length > 0) {
-    config.tool = tool as unknown as AppConfig["tool"]
+  if (process.env.WEBSEARCH_SEARCH_ENDPOINT) config.searchEndpoint = process.env.WEBSEARCH_SEARCH_ENDPOINT
+  if (process.env.WEBSEARCH_FETCH_ENDPOINT) config.fetchEndpoint = process.env.WEBSEARCH_FETCH_ENDPOINT
+  if (process.env.WEBSEARCH_DEFAULT_COUNT) config.defaultCount = Number(process.env.WEBSEARCH_DEFAULT_COUNT)
+  if (process.env.WEBSEARCH_NEED_CONTENT !== undefined) {
+    config.needContent = process.env.WEBSEARCH_NEED_CONTENT === "true" || process.env.WEBSEARCH_NEED_CONTENT === "1"
   }
+  if (process.env.WEBSEARCH_FETCH_MAX_CHARS) config.fetchMaxChars = Number(process.env.WEBSEARCH_FETCH_MAX_CHARS)
+  if (process.env.WEBSEARCH_TIMEOUT_MS) config.timeoutMs = Number(process.env.WEBSEARCH_TIMEOUT_MS)
+
+  if (process.env.WEBSEARCH_TOOL_NAME) config.tool = { name: process.env.WEBSEARCH_TOOL_NAME }
 
   if (process.env.WEBSEARCH_LOG_ENABLED !== undefined) {
     config.logEnabled = process.env.WEBSEARCH_LOG_ENABLED === "true" || process.env.WEBSEARCH_LOG_ENABLED === "1"
@@ -150,45 +178,59 @@ function loadEnvConfig(): Partial<AppConfig> {
     config.searchStatsEnabled = process.env.WEBSEARCH_SEARCH_STATS_ENABLED === "true" || process.env.WEBSEARCH_SEARCH_STATS_ENABLED === "1"
   }
 
-  return config
+  return { config, legacyKeys }
 }
 
-function parseCliArgs(argv: string[]): Partial<AppConfig> {
+function parseCliArgs(argv: string[]): PartialLoad {
   const config: Partial<AppConfig> = {}
-
   const toolConfig: Partial<AppConfig["tool"]> = {}
+  const legacyKeys: string[] = []
 
-  for (const arg of argv) {
+  for (let index = 0; index < argv.length; index++) {
+    const arg = argv[index]
     if (!arg.startsWith("--")) continue
 
     const eqIndex = arg.indexOf("=")
     const key = eqIndex === -1 ? arg.slice(2) : arg.slice(2, eqIndex)
-    const value = eqIndex === -1 ? "true" : arg.slice(eqIndex + 1)
+    let value = eqIndex === -1 ? "true" : arg.slice(eqIndex + 1)
+
+    if (eqIndex === -1) {
+      const next = argv[index + 1]
+      if (next !== undefined && !next.startsWith("--")) {
+        value = next
+        index++
+      }
+    }
+
+    if (DEPRECATED_CLI_KEYS.has(key)) {
+      legacyKeys.push(`--${key}`)
+      continue
+    }
 
     switch (key) {
       case "api-key":
         config.apiKey = value
         break
-      case "endpoint":
-        config.endpoint = value
+      case "search-endpoint":
+        config.searchEndpoint = value
         break
-      case "model":
-        config.model = value
+      case "fetch-endpoint":
+        config.fetchEndpoint = value
         break
-      case "max-tokens":
-        config.maxTokens = Number(value)
+      case "default-count":
+        config.defaultCount = Number(value)
         break
-      case "system-prompt":
-        config.systemPrompt = value
+      case "need-content":
+        config.needContent = value === "true" || value === "1" || value === ""
+        break
+      case "fetch-max-chars":
+        config.fetchMaxChars = Number(value)
+        break
+      case "timeout-ms":
+        config.timeoutMs = Number(value)
         break
       case "tool-name":
         toolConfig.name = value
-        break
-      case "tool-type":
-        toolConfig.type = value
-        break
-      case "max-uses":
-        toolConfig.max_uses = Number(value)
         break
       case "log-enabled":
         config.logEnabled = value === "true" || value === "1" || value === ""
@@ -206,7 +248,7 @@ function parseCliArgs(argv: string[]): Partial<AppConfig> {
     config.tool = toolConfig as AppConfig["tool"]
   }
 
-  return config
+  return { config, legacyKeys }
 }
 
 function deepMerge<T extends Record<string, unknown>>(base: T, ...overrides: Partial<T>[]): T {
@@ -215,10 +257,9 @@ function deepMerge<T extends Record<string, unknown>>(base: T, ...overrides: Par
     for (const key of Object.keys(override) as (keyof T)[]) {
       const val = override[key]
       // `undefined` is the only value meaning "not specified". An empty string is a deliberate
-      // clear, but only where the already-resolved value is a string: that lets `model`,
-      // `endpoint`, `systemPrompt`, `apiKey` and `logDir` be emptied, while `maxTokens` (number)
-      // and `logEnabled`/`searchStatsEnabled` (boolean) keep their previous value instead of
-      // receiving an untyped empty string.
+      // clear, but only where the already-resolved value is a string: that lets string keys be
+      // emptied, while numeric and boolean keys keep their previous value instead of receiving
+      // an untyped empty string.
       if (val === undefined) continue
       if (val === "" && typeof result[key] !== "string") continue
       if (typeof val === "object" && val !== null && !Array.isArray(val)) {
@@ -234,30 +275,117 @@ function deepMerge<T extends Record<string, unknown>>(base: T, ...overrides: Par
   return result
 }
 
+function warnInvalid(key: string, value: unknown, fallback: string): void {
+  warnToStderr(
+    `[websearch-via-deepseek] Ignoring invalid ${key} value ${JSON.stringify(value)}; using ${fallback}.`,
+  )
+}
+
+function parseInteger(value: unknown, min: number, max: number, fallback: number, key: string): number {
+  const numeric = typeof value === "number" ? value : typeof value === "string" && value.trim() !== "" ? Number(value) : Number.NaN
+  if (!Number.isFinite(numeric)) {
+    warnInvalid(key, value, String(fallback))
+    return fallback
+  }
+  const integer = Math.trunc(numeric)
+  if (integer < min || integer > max) {
+    const clamped = Math.min(Math.max(integer, min), max)
+    warnToStderr(`[websearch-via-deepseek] ${key} ${integer} is outside ${min}-${max}; using ${clamped}.`)
+    return clamped
+  }
+  return integer
+}
+
+function parseBoolean(value: unknown, fallback: boolean, key: string): boolean {
+  if (typeof value === "boolean") return value
+  if (value === "true" || value === "1") return true
+  if (value === "false" || value === "0") return false
+  warnInvalid(key, value, String(fallback))
+  return fallback
+}
+
+function parseEndpoint(value: unknown, fallback: string, key: string): string {
+  if (typeof value !== "string" || value.trim() === "") {
+    warnInvalid(key, value, fallback)
+    return fallback
+  }
+  try {
+    const url = new URL(value)
+    if (url.protocol !== "http:" && url.protocol !== "https:") {
+      warnInvalid(key, value, fallback)
+      return fallback
+    }
+    return value
+  } catch {
+    warnInvalid(key, value, fallback)
+    return fallback
+  }
+}
+
+function parseString(value: unknown, fallback: string, key: string): string {
+  if (typeof value !== "string" || value === "") {
+    warnInvalid(key, value, fallback)
+    return fallback
+  }
+  return value
+}
+
+function normalizeConfig(raw: AppConfig): AppConfig {
+  const defaults = getDefaultConfig()
+  const tool: Record<string, unknown> = isRecord(raw.tool) ? raw.tool : {}
+
+  return {
+    apiKey: typeof raw.apiKey === "string" ? raw.apiKey : "",
+    searchEndpoint: parseEndpoint(raw.searchEndpoint, defaults.searchEndpoint, "searchEndpoint"),
+    fetchEndpoint: parseEndpoint(raw.fetchEndpoint, defaults.fetchEndpoint, "fetchEndpoint"),
+    defaultCount: parseInteger(raw.defaultCount, 1, 50, defaults.defaultCount, "defaultCount"),
+    needContent: parseBoolean(raw.needContent, defaults.needContent, "needContent"),
+    fetchMaxChars: parseInteger(raw.fetchMaxChars, 1_000, 200_000, defaults.fetchMaxChars, "fetchMaxChars"),
+    timeoutMs: parseInteger(raw.timeoutMs, 1_000, 120_000, defaults.timeoutMs, "timeoutMs"),
+    tool: {
+      name: parseString(tool.name, defaults.tool.name, "tool.name"),
+    },
+    logEnabled: parseBoolean(raw.logEnabled, defaults.logEnabled, "logEnabled"),
+    logDir: typeof raw.logDir === "string" && raw.logDir !== "" ? raw.logDir : defaults.logDir,
+    searchStatsEnabled: parseBoolean(raw.searchStatsEnabled, defaults.searchStatsEnabled, "searchStatsEnabled"),
+  }
+}
+
 export interface ConfigResult {
   config: AppConfig
   configDir: string
   configFilePath: string
+  legacyKeys: string[]
 }
 
 export function loadConfig(argv: string[] = process.argv.slice(2)): ConfigResult {
   ensureUserConfig()
 
   const defaults = getDefaultConfig()
-  const userConfig = loadUserConfig()
-  const envConfig = loadEnvConfig()
-  const cliConfig = parseCliArgs(argv)
+  const user = loadUserConfig()
+  const env = loadEnvConfig()
+  const cli = parseCliArgs(argv)
 
-  const config = deepMerge(
+  const merged = deepMerge(
     defaults as unknown as Record<string, unknown>,
-    userConfig as unknown as Record<string, unknown>,
-    envConfig as unknown as Record<string, unknown>,
-    cliConfig as unknown as Record<string, unknown>,
+    user.config as unknown as Record<string, unknown>,
+    env.config as unknown as Record<string, unknown>,
+    cli.config as unknown as Record<string, unknown>,
   ) as unknown as AppConfig
 
+  const legacyKeys = [...new Set([...user.legacyKeys, ...env.legacyKeys, ...cli.legacyKeys])].sort()
+
+  if (legacyKeys.length > 0) {
+    warnToStderr(
+      `[websearch-via-deepseek] Ignoring deprecated configuration keys: ${legacyKeys.join(", ")}. ` +
+      "The Search/Fetch backend no longer uses them; see the README migration notes.",
+    )
+  }
+
   return {
-    config,
+    config: normalizeConfig(merged),
     configDir: getConfigDir(),
     configFilePath: getConfigFilePath(),
+    legacyKeys,
   }
 }
